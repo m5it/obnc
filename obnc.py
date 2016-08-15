@@ -25,10 +25,9 @@ from threading import Thread
 import f as f          # random functions
 import f_net as fnet   # socket functions
 import f_help as fhelp # usage
+import f_bnc as fbnc   #
 ###################################################################################
 
-version      = "16.8.14"
-debug=0
 server       = 0
 server_port  = 11337
 server_addr  = "0.0.0.0"
@@ -40,46 +39,7 @@ server_run   = 1
 ircs="192.186.157.43"
 ircp=6667
 username="t3ch"
-password="yourpass"
-
-###
-pbnc=0 # handle to thread bnc()
-
-###
-aClients = [] # array of clients
-
-# 
-class Clients:
-    def __init__(self, username):
-        self.username = username
-        self.password = ""
-        self.online   = 0
-        self.socket   = 0
-        self.irc_pass = ""
-        self.irc_nick = ""
-        self.irc_user = ""
-        
-###
-def client_search(username):
-    global aClients
-    
-    for i in range(0,len(aClients)):
-        aclient = aClients[i]
-        print "a.username: {} vs {}\n".format( aclient.username, username )
-        
-        if aclient.username == username:
-            return i
-    return -1
-    
-##
-def init(spass, nick, user):
-    global version
-    ws = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ws.connect((ircs,ircp))
-    ws.send("PASS {}\r\n".format(spass))
-    ws.send("NICK {}\r\n".format(nick))
-    ws.send("USER {} * * :obnc v{} at https://github.com/m5it/obnc\r\n".format(user,version))
-    return ws
+password="skrlat"
 
 ###
 # SERVER FUNCTIONS
@@ -87,7 +47,7 @@ def init(spass, nick, user):
 #class threaded_server_handler(SocketServer.BaseRequestHandler):
 class threaded_server_handler(SocketServer.StreamRequestHandler):
     def handle(self):
-        global aClients
+        global aClients, ircs, ircp
         
         self.request.settimeout(1)
         
@@ -136,13 +96,14 @@ class threaded_server_handler(SocketServer.StreamRequestHandler):
                         print "user: {}".format(auser[1])
                         if username==auser[1]:
                             print "username ok"
-                            x=client_search(username)
+                            x=fbnc.client_search(username)
                             if x==-1:
                                 print "creating new client"
-                                aclient=Clients(username)
+                                aclient=fbnc.Clients(username)
                             else:
                                 print "using aclient at: {}".format(x)
-                                aclient=aClients[x]
+                                #aclient=aClients[x]
+                                aclient=fbnc.client_get(x)
                             
                             step=2
                         else:
@@ -164,27 +125,30 @@ class threaded_server_handler(SocketServer.StreamRequestHandler):
                                 print "logedin with password: {}".format(password)
                                 aclient.password=password
                                 aclient.online = 1
+                                aclient.irc_user = auser[1]
+                                aclient.irc_pass = apass[1]
+                                aclient.irc_nick = anick[1]
                                 step=3
+                                
                                 
                     ###
                     if step==3:
                         # bounc
                         print "step 3"
                         if aclient.socket==0:
-                            aclient.socket=init(apass[1], anick[1], auser[1])
+                            aclient.socket=fbnc.init(apass[1], anick[1], auser[1], ircs, ircp)
                         
                             # save aclient
                             if x==-1:
-                                aClients.append( aclient )
-                                x=len(aClients)-1
+                                #aClients.append( aclient )
+                                x=fbnc.client_set(aclient,x)
+                                #x=len(aClients)-1
                             else:
-                                aClients[x]=aclient
+                                #aClients[x]=aclient
+                                fbnc.client_set(aclient,x)
                         else:
-                            #ADD: if reusing sockets manage imaginary rejoin to channels. just memorize channels and run join #chan & /names #chan ?
                             print "reusing sockets at aclient x: {}".format(x)
-                            self.request.sendall(":t3ch!~t3ch@unaffiliated/t3ch JOIN #obnc\r\n")
-                            self.request.sendall(":tepper.freenode.net 353 t3ch @ #obnc :t3ch t3ch_\r\n")
-                            self.request.sendall(":tepper.freenode.net 366 t3ch #obnc :End of /NAMES list.\r\n")
+                            fbnc.imaginary_join(self.request,x)
 
                         ###
                         while run_irc:
@@ -201,17 +165,16 @@ class threaded_server_handler(SocketServer.StreamRequestHandler):
                                 
                             if len(cdata)>0:
                                 print "cdata: {}".format(cdata)
-                                #cs.send("{}\r\n".format(cdata))
-                                
-                                if f.rmatch("QUIT.*",cdata)==1:
-                                    print "QUIT!!!!"
-                                    aclient.online=0
-                                    aClients[x]=aclient
-                                   
+                                check=fbnc.handle_client_data(cdata,x)
+                                if check==-1:
+                                    print "client closed connection..."
                                     run_irc=0
                                     break
-                                else:
-                                    aclient.socket.send("{}\r\n".format(cdata))
+                                elif check==-2:
+                                    print "client closed bnc... thread is still running?? :)"
+                                    run_irc=0
+                                    run_bnc=0
+                                    break
                     
                     ### supported commands for bnc without authentication & connection with irc ###
                     if f.rmatch("PING.*",data)==1:
@@ -236,37 +199,7 @@ class threaded_server_handler(SocketServer.StreamRequestHandler):
                 
 class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
     pass
-
-###
-def bnc(name):
-    global aClients
-    cnt=0
-    max=3
-    sleep=2
-    print "starting bnc, aClients len: {}".format(len(aClients))
-    while cnt<=max:
-        for i in range(0,len(aClients)):
-            ac = aClients[i]
     
-            if ac.online==0: # offline
-                idata = fnet.recv_timeout(ac.socket,0)
-                if len(idata)>0:
-                    print "bnc idata: {}".format(idata)
-                    if f.rmatch("PING.*",idata)==1:
-                        ac.socket.send("PONG\r\n")
-                        print "bnc PONG"
-                    #ADD: on privmsg send we are not here...
-            else:
-                 print "bnc user: {} online".format(ac.username)
-                 
-        print "sleeping {}s, cnt: {}".format(sleep,cnt)
-        time.sleep(sleep)
-        cnt+=1
-        
-    # starting new thread
-    print "starting pbnc"    
-    pbnc = Thread( target=bnc, args=("pbnc", ) )
-    pbnc.start() 
       
 ###
 def serv():
@@ -280,7 +213,7 @@ def serv():
     server_thread = threading.Thread(target=server.serve_forever)
     server_thread.daemon = True
     server_thread.start()
-    print "Server loop running in thread:", server_thread.name
+    print "obnc v{} on thread: {}".format(fbnc.version, server_thread.name)
     
     ### 
     while server_run:
@@ -293,9 +226,6 @@ def serv():
 ### main function
 def main(argv):
     global server, server_addr, server_port
-    
-    if len(argv) <= 0:
-        fhelp.help()
     
     try:                                
         opts, args = getopt.getopt(argv,"dhp:a:",["p","a"])
@@ -314,7 +244,7 @@ def main(argv):
             server_addr = arg
 
     ### bnc()
-    pbnc = Thread( target=bnc, args=("pbnc", ) )
+    pbnc = Thread( target=fbnc.bnc, args=("pbnc", ) )
     pbnc.start()
     
     ###
