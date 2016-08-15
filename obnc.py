@@ -39,7 +39,7 @@ server_run   = 1
 ircs="192.186.157.43"
 ircp=6667
 username="t3ch"
-password="skrlat"
+password="yourpass"
 
 ###
 # SERVER FUNCTIONS
